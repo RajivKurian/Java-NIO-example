@@ -56,7 +56,8 @@ class NetworkEventProcessor(ringBufferNetwork: RingBuffer[NetworkEvent],
   }
 }
 
-// A class on top of any memory allocator that uses the ring buffer collector to claim back the memory it hands out.
+// A ring buffer resource collector that allocates from a memory allocator into ring buffer entries.
+// It reclaims memory on it's own as long as it can keep track of the producer index.
 class RingBufferMemoryCollector(maxSize: Int, minSize: Int, ringBuffer: RingBuffer[NetworkEvent], 
                                 sequenceBarrier: SequenceBarrier)
   extends RingBufferResourceCollector[NetworkEvent, ByteBuffer](ringBuffer, sequenceBarrier) {
@@ -99,7 +100,7 @@ class RingBufferMemoryCollector(maxSize: Int, minSize: Int, ringBuffer: RingBuff
 }
 
 object NioServer {
-  val DEFAULT_BUFFER_SIZE = 512
+  val DEFAULT_BUFFER_SIZE = 128
   val DEFAULT_PORT = 9090
   val DEFAULT_SELECTOR_TIMEOUT = 100L //100 ms.
 
