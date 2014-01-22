@@ -56,11 +56,11 @@ class NetworkEventProcessor(ringBufferNetwork: RingBuffer[NetworkEvent],
   }
 }
 
-// A ring buffer resource collector that allocates from a memory allocator into ring buffer entries.
-// It reclaims memory on it's own as long as it can keep track of the producer index.
-class RingBufferMemoryCollector(maxSize: Int, minSize: Int, ringBuffer: RingBuffer[NetworkEvent], 
+// A ring buffer + memory allocator that allocates from a memory allocator into ring buffer entries.
+// It reclaims memory on it's own since it keeps track of the producer index.
+class MemoryCollectorRingBuffer(maxSize: Int, minSize: Int, ringBuffer: RingBuffer[NetworkEvent], 
                                 sequenceBarrier: SequenceBarrier)
-  extends RingBufferResourceCollector[NetworkEvent, ByteBuffer](ringBuffer, sequenceBarrier) {
+  extends ResourceCollectorRingBuffer[NetworkEvent, ByteBuffer](ringBuffer, sequenceBarrier) {
 
   private[this] val allocator = Allocators.getNewAllocator(maxSize, minSize)
 
@@ -89,7 +89,7 @@ class RingBufferMemoryCollector(maxSize: Int, minSize: Int, ringBuffer: RingBuff
     }
   }
 
-  def printResource(msg: String) {
+  private def printResource(msg: String) {
     println("--------------------------" + msg)
     printResource()
   }
@@ -132,8 +132,8 @@ class NioServer(port: Int) {
   final val executor = Executors.newSingleThreadExecutor()
   executor.submit(networkEventProcessor)
 
-  val memoryCollector = new RingBufferMemoryCollector(BUDDY_POOL_MAX_SIZE, BUDDY_POOL_MIN_SIZE, ringBufferNetwork,
-                                                      sequenceBarrierNetwork)
+  val collectingRingBuffer = new MemoryCollectorRingBuffer(BUDDY_POOL_MAX_SIZE, BUDDY_POOL_MIN_SIZE, ringBufferNetwork,
+                                                           sequenceBarrierNetwork)
 
   val (selector, serverChannel) = initSelectorAndBind()
 
@@ -185,7 +185,7 @@ class NioServer(port: Int) {
   private def read(key: SelectionKey) {
     val socketChannel = key.channel().asInstanceOf[SocketChannel]
     // Memory collector will reclaim buffers on its own.
-    val readBuffer = memoryCollector.getBuffer(DEFAULT_BUFFER_SIZE)
+    val readBuffer = collectingRingBuffer.getBuffer(DEFAULT_BUFFER_SIZE)
     assert(readBuffer != null)
     readBuffer.clear()
     var numRead = 0;
@@ -205,10 +205,8 @@ class NioServer(port: Int) {
     } else {
       println("Read some bytes from the client" + numRead)
       readBuffer.flip()
-      val index = ringBufferNetwork.next()
-      val event = ringBufferNetwork.get(index)
-      // We need to update the producer cursor so that the memory collector can reclaim buffers appropriately.
-      memoryCollector.updateProducerCursor(index)
+      val index = collectingRingBuffer.next()
+      val event = collectingRingBuffer.get(index)
       event.buffer = readBuffer
       event.socketChannel = socketChannel
       ringBufferNetwork.publish(index)
