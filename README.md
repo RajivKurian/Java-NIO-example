@@ -6,9 +6,9 @@ An example  of a multi-threaded NIO server using the Disruptor framework.
 To run:
 -------
 
-  git clone https://github.com/RajivKurian/Java-NIO-example.git
-  sbt run
-  Server should start on port 9090.
+    git clone https://github.com/RajivKurian/Java-NIO-example.git
+    sbt run
+    Server should start on port 9090.
 
 Details
 -------
