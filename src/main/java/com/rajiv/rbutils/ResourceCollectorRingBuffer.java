@@ -36,7 +36,7 @@ public abstract class ResourceCollectorRingBuffer<E, R> {
     this.ringBufferSize = ringBuffer.getBufferSize();
   }
 
-  // Ring buffer functions that are needed by the producer.
+  // Ring buffer functions that are needed by the producer. This assumes that all indexes are published.
   public long next() {
     long index = ringBuffer.next();
     updateProducerCursor(index);
