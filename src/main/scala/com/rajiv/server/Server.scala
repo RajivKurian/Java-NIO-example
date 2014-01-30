@@ -46,10 +46,15 @@ class NetworkEventProcessor(ringBufferNetwork: RingBuffer[NetworkEvent],
   def handleEvent(event: NetworkEvent, sequence: Long) {
     System.out.println("Processor thread new event.")
     readBuffer = event.buffer // Should we duplicate to avoid false sharing?
+    println(s"Before writing payload position is ${readBuffer.position()} and limit is ${readBuffer.limit()}")
+
     while (readBuffer.hasRemaining()) {
       event.socketChannel.write(readBuffer)
       //print(readBuffer.get().asInstanceOf[Char])
     }
+    println(s"After writing payload position is ${readBuffer.position()} and limit is ${readBuffer.limit()}")
+    println("------------------------------------------------------------------------\n")
+
     if (readBuffer.hasRemaining()) {
       print("We could not write all bytes, we should express interest in OP_WRITE and write in the future")
     }
@@ -82,10 +87,12 @@ class MemoryCollectorRingBuffer(maxSize: Int, minSize: Int, ringBuffer: RingBuff
         printResource("About to start a recycle event")
         recycle()
         printResource("After a recycle event")
-        allocator.allocate(size)
+        buf = allocator.allocate(size)
       } else {
         buf
       }
+      buf.clear()
+      buf
     }
   }
 
@@ -104,6 +111,8 @@ object NioServer {
   val DEFAULT_PORT = 9090
   val DEFAULT_SELECTOR_TIMEOUT = 100L //100 ms.
 
+  val LENGTH_BYTES = 4
+  val LENGTH_BUFFER_INITIAL_POOL_SIZE = 20
   val RING_BUFFER_SIZE = 4
 
   val BUDDY_POOL_MAX_SIZE = 1024  // Bytes.
@@ -135,6 +144,8 @@ class NioServer(port: Int) {
   val collectingRingBuffer = new MemoryCollectorRingBuffer(BUDDY_POOL_MAX_SIZE, BUDDY_POOL_MIN_SIZE, ringBufferNetwork,
                                                            sequenceBarrierNetwork)
 
+  val lengthBufferPool = new FixedCapacityBufferPool(LENGTH_BYTES, LENGTH_BUFFER_INITIAL_POOL_SIZE);
+
   val (selector, serverChannel) = initSelectorAndBind()
 
   private[this] def initSelectorAndBind(): (Selector, ServerSocketChannel) = {
@@ -157,6 +168,7 @@ class NioServer(port: Int) {
         val keyIterator = selector.selectedKeys.iterator
         while (keyIterator.hasNext) {
           val key = keyIterator.next()
+          //if (key.isValid())
           if (key.isAcceptable) {
             accept(key)
           } else if (key.isReadable) {
@@ -184,32 +196,131 @@ class NioServer(port: Int) {
 
   private def read(key: SelectionKey) {
     val socketChannel = key.channel().asInstanceOf[SocketChannel]
-    // Memory collector will reclaim buffers on its own.
-    val readBuffer = collectingRingBuffer.getBuffer(DEFAULT_BUFFER_SIZE)
-    assert(readBuffer != null)
-    readBuffer.clear()
-    var numRead = 0;
+    val attachment = key.attachment()
+    println("Read event")
+    if (attachment == null) {
+      // New client, no old attachment.
+      println("No attachment found fresh read")
+      readFreshRequest(key, socketChannel, null)
+    } else if (attachment.isInstanceOf[ByteBuffer]) {
+      println("Attachment is a byte buffer, need to read length")
+      // We did not manage to first 4 bytes to read the length of the buffer. So continue reading into it.
+      readLength(key, socketChannel, attachment.asInstanceOf[ByteBuffer], null)
+    } else if (attachment.isInstanceOf[Protocol]) {
+      println("Attachment is an instance of protocol")
+      // We are in the middle of reading the length prefixed protocol. Continue reading into it.
+      readProtocol(key, socketChannel, attachment.asInstanceOf[Protocol])
+    }
+  }
+
+  private def readFreshRequest(key: SelectionKey, socketChannel: SocketChannel, existingProtocolObject: Protocol) {
+    // First allocate a ByteBuffer of capacity 4 and read into it to figure out the length.
+    val lengthBuffer = lengthBufferPool.allocate()
+    readLength(key, socketChannel, lengthBuffer, existingProtocolObject)
+  }
+
+  private def readLength(key: SelectionKey, socketChannel: SocketChannel, lengthBuffer: ByteBuffer,
+                         existingProtocolObject: Protocol) {
+    val retVal = readGeneric(key, socketChannel, lengthBuffer)
+    if (retVal) {
+      println(s"After read LengthBuffer position is ${lengthBuffer.position()} and limit is ${lengthBuffer.limit()}")
+      if (lengthBuffer.position() < LENGTH_BYTES - 1) {
+        println("We could not read 4 bytes of length off the network. Current position is " + lengthBuffer.limit())
+        // We could not even read the first 4 bytes.
+        // Attach the same byte buffer to the selectionKey and try later.
+        key.attach(lengthBuffer)
+      } else {
+        // We read all 4 bytes. Allocate a protocol object and read further.
+        lengthBuffer.flip()
+        println(s" After flipping LengthBuffer position is ${lengthBuffer.position()} and limit is ${lengthBuffer.limit()}")
+        val length = lengthBuffer.getInt()
+        // Return lengthBuffer to be reused by the pool.
+        lengthBufferPool.free(lengthBuffer)
+        // TODO: Handle this.
+        assert(length > 0 && length < Protocol.MAX_LENGTH)
+        // Allocate a buffer and read the rest of the request.
+        println("New request has length " + length)
+        val readBuffer = collectingRingBuffer.getBuffer(length);
+        // TODO: Handle null buffers with back-pressure or using new allocators.
+        assert(readBuffer != null)
+        var protocol: Protocol = if (existingProtocolObject != null) {
+          // Re-use the old protocol object.
+          existingProtocolObject.length = length
+          existingProtocolObject.payload = readBuffer
+          existingProtocolObject
+        } else {
+          new Protocol(length, readBuffer)
+        }
+        // Attach the protocol for future reads.
+        key.attach(protocol)
+        readProtocol(key, socketChannel, protocol)
+      }
+    } else {
+      // Handle failure.
+      println("Could not read length of request properly key cancelled.")
+      lengthBufferPool.free(lengthBuffer)
+    }
+  }
+
+  // Return value indicates if a complete protocol message was received.
+  private def readProtocol(key: SelectionKey, socketChannel: SocketChannel, protocol: Protocol) {
+    if (protocol.isInitialized) {
+      // We are in the middle of reading a new request. Handle it.
+      val payload = protocol.payload
+      val retval = readGeneric(key, socketChannel, payload)
+      if (retval) {
+        if (protocol.isComplete) {
+          // Publish the event.
+          println("Protocol is complete sending all bytes to consumer thread")
+          payload.flip()
+          println(s" After flipping payload position is ${payload.position()} and limit is ${payload.limit()}")
+          val index = collectingRingBuffer.next()
+          val event = collectingRingBuffer.get(index)
+          event.buffer = payload
+          event.socketChannel = socketChannel
+          ringBufferNetwork.publish(index)
+          // Reset the protocol so future requests work as expected.
+          protocol.reset()
+        } else {
+          // Protocol is not complete. Just keep going. No need to attach since we assume that the protocol object
+          // has already been attached while reading the length.
+          println("Did not finish reading all bytes, waiting for more bytes in the future")
+        }
+      } else {
+        println("Could not read request - key cancelled.")
+        collectingRingBuffer.release(protocol.payload)
+      }
+    } else {
+      // We reset the old protocol object. We must read the length again.
+      println("We are re-using an old protocol object we must read a fresh length")
+      readFreshRequest(key, socketChannel, protocol)
+    }
+  }
+
+    private def readGeneric(key: SelectionKey, socketChannel: SocketChannel, buffer: ByteBuffer): Boolean = {
+    var success = true
+    var numRead = -1
     try {
-      numRead = socketChannel.read(readBuffer)
+      numRead = socketChannel.read(buffer)
+      while (numRead > 0) {
+        println(s"Generic read: Read $numRead bytes")
+        println(s"After read buffer position is ${buffer.position()} and limit is ${buffer.limit()}")
+        numRead = socketChannel.read(buffer)
+      }
     } catch {
       case e: java.io.IOException => {
         key.cancel()
         socketChannel.close()
-        println("Forceful shutdown")
+        println("Forceful Shutdown")
+        success = false
       }
     }
     if (numRead == -1) {
-      println("Graceful shutdown")
-      key.channel.close();
-      key.cancel();
-    } else {
-      println("Read some bytes from the client" + numRead)
-      readBuffer.flip()
-      val index = collectingRingBuffer.next()
-      val event = collectingRingBuffer.get(index)
-      event.buffer = readBuffer
-      event.socketChannel = socketChannel
-      ringBufferNetwork.publish(index)
+      println("Graceful shutodwn")
+      key.channel.close()
+      key.cancel()
+      success = false
     }
+    success
   }
 }
