@@ -19,6 +19,8 @@ public class BinaryBuddy implements Allocator {
   public ArrayList<ArrayDeque<ByteBuffer>> unused;
   public long startAddress, endAddress;
 
+  private final ByteBuffer[] splitResult = new ByteBuffer[2];
+
   // maxCapacity and minCapacity in bytes.
   public BinaryBuddy(int maxCapacity, int minCapacity) {
     this.maxCapacity = Utils.nextPowerOfTwo(maxCapacity);
@@ -26,12 +28,14 @@ public class BinaryBuddy implements Allocator {
     int numLevels= Utils.log2(maxCapacity) - Utils.log2(minCapacity) + 1;
     maxLevel = numLevels - 1;
     assert(numLevels > 0);
+
     used = new ArrayList<ArrayDeque<ByteBuffer>>(numLevels);
     unused = new ArrayList<ArrayDeque<ByteBuffer>>(numLevels);
     for (int i = 0; i < numLevels; i++) {
       used.add(new ArrayDeque<ByteBuffer>(DEFAULT_LEVEL_SIZE));
       unused.add(new ArrayDeque<ByteBuffer>(DEFAULT_LEVEL_SIZE));
     }
+
     ByteBuffer buffer = ByteBuffer.allocateDirect(maxCapacity);
     addUnusedBufferToLevel(maxLevel, buffer);
     startAddress = PlatformDependent.directBufferAddress(buffer);
@@ -48,12 +52,11 @@ public class BinaryBuddy implements Allocator {
     bufferLevel.add(buffer);
   }
 
-  public int getLevel(int capacity) {
+  private int getLevel(int capacity) {
     return Math.max(0,Utils.log2(capacity - minCapacity));
   }
 
-  private ByteBuffer[] split(ByteBuffer buffer) {
-    ByteBuffer[] bufferArray = new ByteBuffer[2];
+  private void split(ByteBuffer buffer, ByteBuffer[] result) {
     int capacity = buffer.capacity();
     int newCapacity = capacity/2;
     long address1 = PlatformDependent.directBufferAddress(buffer);
@@ -67,9 +70,8 @@ public class BinaryBuddy implements Allocator {
     PlatformDependent.setDirectBufferAddress(buffer2, address2);
     PlatformDependent.setDirectBufferCapacity(buffer1, newCapacity);
     PlatformDependent.setDirectBufferCapacity(buffer2, newCapacity);
-    bufferArray[0] = buffer1;
-    bufferArray[1] = buffer2;
-    return bufferArray;
+    result[0] = buffer1;
+    result[1] = buffer2;
   }
 
   // Render a bytebuffer harmless to GC by setting capacity to 0.
@@ -104,7 +106,6 @@ public class BinaryBuddy implements Allocator {
     if (minLevel == -1) {
       return null;
     } else {
-      ByteBuffer[] splitBuffers;
 
       ArrayDeque<ByteBuffer> currentLevel = unused.get(minLevel);
       int currentLevelNum = minLevel;
@@ -113,10 +114,10 @@ public class BinaryBuddy implements Allocator {
       // Recursively split till we go down to the right size.
       while (result.capacity() > capacity) {
         //System.out.println("Found a buffer with a larger than needed capacity " + result.capacity() + " - splitting.");
-        splitBuffers = split(result);
-        result = splitBuffers[0];
+        split(result, splitResult);
+        result = splitResult[0];
         int lowerLevel = currentLevelNum - 1;
-        addUnusedBufferToLevel(lowerLevel, splitBuffers[1]);
+        addUnusedBufferToLevel(lowerLevel, splitResult[1]);
         //System.out.println("Added an unused buffer to level " + lowerLevel);
         //System.out.println("Unused list is now \n" + unused);
         currentLevelNum = lowerLevel;
@@ -205,7 +206,7 @@ public class BinaryBuddy implements Allocator {
       }
     }
   }
-  
+
   public void print() {
     System.out.println("Used buffers: " +used);
     System.out.println("Unused buffers: " + unused);
