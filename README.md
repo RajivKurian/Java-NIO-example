@@ -39,9 +39,9 @@ More Details
 Todo
 ----------
 
-1.  Since we allocate optimally based on the length a client specifies, malicious clients can cause us to run out of buffers. We need to use a timer to prevent slowloris attacks. I'll probably use a hashed-wheel timer that gets it's ticks on the network's event loop. We must protect against multiple attacks including:
+1.  Since we allocate ByteBuffers optimally based on the length a client specifies, malicious clients can cause us to run out of buffers. We need to use a timer to prevent slowloris attacks. I'll probably use a hashed-wheel timer that gets it's ticks on the network's event loop. We must protect against multiple attacks including:
     1.  A client specifies a large length and then never sends the actual payload. A simple timer plus a malicious client list will help here.
-    2.  A client specifies a large length and then sends a few bytes at a time again tying up a buffer. We should count the number of timers resets required to finish a request. If it goes above a certain threshold we could disconnect the client and put it on the malicious client list.
+    2.  A client specifies a large length and then sends a few bytes at a time again tying up a buffer and continously resetting the idle timer. We should count the number of timer resets required to finish a request. If it goes above a certain threshold we could disconnect the client and put it on the malicious client list.
 2.  The select calls on the processor thread are not done yet. We need to balance between polling the ring buffer and making select calls. We only need to make select calls if all bytes could not be synchronously writen.
 
 
