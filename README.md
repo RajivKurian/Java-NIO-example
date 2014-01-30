@@ -7,7 +7,7 @@ To run:
 -------
 
     git clone https://github.com/RajivKurian/Java-NIO-example.git
-    sbt run and start server first Server should start on port 9090.
+    sbt run and start server first. Server should start on port 9090.
     sbt run and start client. Client should connect to port 9090.
 
 Details
