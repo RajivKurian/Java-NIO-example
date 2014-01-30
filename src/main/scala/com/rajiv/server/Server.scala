@@ -212,7 +212,7 @@ class NioServer(port: Int) {
       }
       case protocol: Protocol => {
         println("Attachment is an instance of protocol")
-      // We are in the middle of reading the length prefixed protocol. Continue reading into it.
+      // Old client. We might be in the middle of reading a protocol message.
       readProtocol(key, socketChannel, protocol)
       }
     }
