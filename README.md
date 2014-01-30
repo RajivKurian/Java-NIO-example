@@ -31,7 +31,7 @@ More Details
 2.  Every new request is prefixed by it's length. The network thread tries to read the first 4 bytes from the wire to figure out the length.
 3.  Once it reads the first 4 bytes, it allocates from a binary buddy allocator, a buffer of the right length and reads the rest of the request from it.
 4.  A request is considered complete when the expected number of bytes are received. This is cheap to check. No complicated parsing happens on this network thread.
-5.  Acomplete request is sent to a processing thread via the Disruptor Ring Buffer. The client's state is reset and we expect a new length prefixed message.
+5.  A complete request is sent to a processing thread via the Disruptor Ring Buffer. The client's state is reset and we expect a new length prefixed message.
 6.  The processor reads from the ByteBuffer and echos the bytes back. If all bytes cannot be written (uncommon), it copies the buffer and starts it's own selector to figure out when to write.
 7.  The processor thread always checks if there are pending requests for a particular client before echoing the bytes back.
 8.  The Ring Buffer abstraction automatically collects ByteBuffers from event entries when the processor marks an event processed. This is done on the producer thread and prevents sharing. Hence the processor must copy the bytes if it needs the ByteBuffer beyond the scope of initial processing.
