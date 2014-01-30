@@ -277,16 +277,8 @@ class NioServer(port: Int) {
       val retval = readGeneric(key, socketChannel, payload)
       if (retval) {
         if (protocol.isComplete) {
-          // Publish the event.
-          println("A complete protocol message has been received. Sending all bytes to consumer thread")
-          payload.flip()
-          println(s" After flipping payload position is ${payload.position()} and limit is ${payload.limit()}")
-          val index = collectingRingBuffer.next()
-          val event = collectingRingBuffer.get(index)
-          event.buffer = payload
-          event.socketChannel = socketChannel
-          ringBufferNetwork.publish(index)
-          // Reset the protocol so future requests work as expected.
+          // Publish the event and reset the protocol so future requests work as expected.
+          publishMessage(payload, socketChannel)
           protocol.reset()
         } else {
           // Protocol is not complete. Just keep going.
@@ -305,6 +297,17 @@ class NioServer(port: Int) {
       println("We are re-using an old protocol object we must read a fresh length")
       readFreshRequest(key, socketChannel, protocol)
     }
+  }
+
+  private def publishMessage(payload: ByteBuffer, socketChannel: SocketChannel) {
+    println("A complete protocol message has been received. Sending all bytes to consumer thread")
+    payload.flip()
+    println(s" After flipping payload position is ${payload.position()} and limit is ${payload.limit()}")
+    val index = collectingRingBuffer.next()
+    val event = collectingRingBuffer.get(index)
+    event.buffer = payload
+    event.socketChannel = socketChannel
+    ringBufferNetwork.publish(index)
   }
 
     private def readGeneric(key: SelectionKey, socketChannel: SocketChannel, buffer: ByteBuffer): Boolean = {
