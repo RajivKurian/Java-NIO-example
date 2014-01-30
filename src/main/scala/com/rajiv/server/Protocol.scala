@@ -3,7 +3,7 @@ package com.rajiv.server
 import java.nio.ByteBuffer
 
 object Protocol {
-  val MAX_LENGTH = 1 << 10
+  val MAX_LENGTH = 128
 }
 
 class Protocol(var length: Int, var payload: ByteBuffer) {

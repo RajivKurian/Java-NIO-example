@@ -27,7 +27,7 @@ class Client (portNumber: Int){
           print(in.readByte().asInstanceOf[Char])
           count += 1
         }
-        println("Done echoing\n")
+        println("\nDone echoing\n")
         userInput = stdIn.readLine()
         println("User input is " + userInput)
       }
